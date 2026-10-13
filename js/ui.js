@@ -64,14 +64,14 @@ function renderizarInventario(items) {
     datos.forEach(item => {
         html += `
             <tr>
-                <td><strong>#${item.id}</strong></td>
-                <td>${item.tipo}</td>
-                <td>${item.marca}</td>
-                <td>${item.modelo}</td>
-                <td><code style="background: var(--background); padding: 2px 8px; border-radius: 4px; font-size: 0.85rem;">${item.serial}</code></td>
-                <td>${item.ubicacion || 'N/A'}</td>
-                <td><span class="estado-badge estado-${item.estado}">${item.estado}</span></td>
-                <td>
+                <td data-label="ID"><strong>#${item.id}</strong></td>
+                <td data-label="Tipo">${item.tipo}</td>
+                <td data-label="Marca">${item.marca}</td>
+                <td data-label="Modelo">${item.modelo}</td>
+                <td data-label="Serial"><code style="background: var(--background); padding: 2px 8px; border-radius: 4px; font-size: 0.85rem;">${item.serial}</code></td>
+                <td data-label="Ubicación">${item.ubicacion || 'N/A'}</td>
+                <td data-label="Estado"><span class="estado-badge estado-${item.estado}">${item.estado}</span></td>
+                <td data-label="Acciones">
                     <div class="acciones-btns">
                         <button class="btn-icon btn-edit" onclick="editarDispositivo(${item.id})" title="Editar">
                             <i class="fas fa-edit"></i>
@@ -135,7 +135,7 @@ function aplicarFiltros() {
 }
 
 // ============================================================
-// CRUD (ahora con API)
+// CRUD (con API)
 // ============================================================
 
 async function agregarDispositivo(dispositivo) {
@@ -260,7 +260,6 @@ function mostrarToast(mensaje, tipo = 'info') {
 // EVENTOS
 // ============================================================
 
-// Abrir modal "Nuevo Dispositivo"
 DOM.btnAgregar.addEventListener('click', () => {
     DOM.modalTitle.textContent = 'Agregar Dispositivo';
     DOM.editId.value = '';
@@ -268,7 +267,6 @@ DOM.btnAgregar.addEventListener('click', () => {
     abrirModal(DOM.modalForm);
 });
 
-// Guardar formulario (NUEVO - async/await)
 DOM.deviceForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -287,7 +285,6 @@ DOM.deviceForm.addEventListener('submit', async (e) => {
         return;
     }
 
-    // Deshabilitar botón mientras se procesa
     DOM.btnGuardar.disabled = true;
     DOM.btnGuardar.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Guardando...';
 
@@ -303,11 +300,9 @@ DOM.deviceForm.addEventListener('submit', async (e) => {
     cerrarModal(DOM.modalForm);
 });
 
-// Cancelar / cerrar modal
 DOM.btnCancelar.addEventListener('click', () => cerrarModal(DOM.modalForm));
 DOM.btnCerrarModal.addEventListener('click', () => cerrarModal(DOM.modalForm));
 
-// Confirmar eliminar
 DOM.btnConfirmarEliminar.addEventListener('click', async () => {
     const id = parseInt(DOM.btnConfirmarEliminar.dataset.id);
     await eliminarDispositivo(id);
@@ -316,7 +311,6 @@ DOM.btnConfirmarEliminar.addEventListener('click', async () => {
 DOM.btnCancelarEliminar.addEventListener('click', () => cerrarModal(DOM.modalConfirmar));
 DOM.btnCerrarConfirmar.addEventListener('click', () => cerrarModal(DOM.modalConfirmar));
 
-// Limpiar filtros
 DOM.btnLimpiarFiltros.addEventListener('click', () => {
     DOM.searchInput.value = '';
     DOM.filterTipo.value = '';
@@ -324,14 +318,12 @@ DOM.btnLimpiarFiltros.addEventListener('click', () => {
     aplicarFiltros();
 });
 
-// Búsqueda en tiempo real (debounce)
 let timeoutBusqueda;
 DOM.searchInput.addEventListener('input', () => {
     clearTimeout(timeoutBusqueda);
     timeoutBusqueda = setTimeout(aplicarFiltros, 300);
 });
 
-// Filtros
 DOM.filterTipo.addEventListener('change', aplicarFiltros);
 DOM.filterEstado.addEventListener('change', aplicarFiltros);
 
@@ -450,7 +442,6 @@ async function procesarImportacion(dispositivos, origen) {
         mostrarToast('Importando dispositivos...', 'info');
         const resultado = await API.importarMasivo(dispositivos);
 
-        // Recargar inventario completo desde la API
         inventario = await API.obtenerInventario();
         aplicarFiltros();
 
@@ -462,5 +453,46 @@ async function procesarImportacion(dispositivos, origen) {
         mostrarToast('Error al importar: ' + error.message, 'error');
     }
 }
+
+// ============================================================
+// ESCÁNER DE CÓDIGOS
+// ============================================================
+
+const btnEscanearSerial = document.getElementById('btnEscanearSerial');
+const btnCerrarScanner = document.getElementById('btnCerrarScanner');
+const btnCambiarCamara = document.getElementById('btnCambiarCamara');
+const btnLinterna = document.getElementById('btnLinterna');
+const modalScanner = document.getElementById('modalScanner');
+
+if (btnEscanearSerial) {
+    btnEscanearSerial.addEventListener('click', () => {
+        Scanner.abrir((codigo) => {
+            DOM.formSerial.value = codigo;
+            mostrarToast('Serial capturado: ' + codigo, 'success');
+        });
+    });
+}
+
+if (btnCerrarScanner) {
+    btnCerrarScanner.addEventListener('click', () => Scanner.cerrar());
+}
+
+if (btnCambiarCamara) {
+    btnCambiarCamara.addEventListener('click', () => Scanner.cambiarCamara());
+}
+
+if (btnLinterna) {
+    btnLinterna.addEventListener('click', () => Scanner.toggleLinterna());
+}
+
+if (modalScanner) {
+    modalScanner.addEventListener('click', (e) => {
+        if (e.target === modalScanner) Scanner.cerrar();
+    });
+}
+
+// ============================================================
+// FIN
+// ============================================================
 
 console.log('✅ UI cargada correctamente');
