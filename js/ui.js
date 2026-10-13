@@ -462,6 +462,7 @@ const btnEscanearSerial = document.getElementById('btnEscanearSerial');
 const btnCerrarScanner = document.getElementById('btnCerrarScanner');
 const btnCambiarCamara = document.getElementById('btnCambiarCamara');
 const btnLinterna = document.getElementById('btnLinterna');
+const btnEnfocar = document.getElementById('btnEnfocar');
 const modalScanner = document.getElementById('modalScanner');
 
 if (btnEscanearSerial) {
@@ -483,6 +484,10 @@ if (btnCambiarCamara) {
 
 if (btnLinterna) {
     btnLinterna.addEventListener('click', () => Scanner.toggleLinterna());
+}
+
+if (btnEnfocar) {
+    btnEnfocar.addEventListener('click', () => Scanner.forzarEnfoque());
 }
 
 if (modalScanner) {

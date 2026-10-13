@@ -248,7 +248,7 @@ function leerArchivoExcel(file) {
 }
 
 // ============================================================
-// ESCÁNER DE CÓDIGOS CON CÁMARA
+// ESCÁNER DE CÓDIGOS CON CÁMARA (v3 - enfoque mejorado)
 // ============================================================
 
 const Scanner = {
@@ -259,7 +259,9 @@ const Scanner = {
     callback: null,
     isScanning: false,
     stream: null,
+    track: null,
     _linterna: false,
+    _hints: null,
 
     async abrir(onDetected) {
         if (typeof ZXing === 'undefined') {
@@ -274,36 +276,87 @@ const Scanner = {
         this.actualizarStatus('Iniciando cámara...', 'info');
 
         try {
-            this.codeReader = new ZXing.BrowserMultiFormatReader();
-            this.devices = await this.codeReader.listVideoInputDevices();
+            const hints = new Map();
+            const formats = [
+                ZXing.BarcodeFormat.CODE_128,
+                ZXing.BarcodeFormat.CODE_39,
+                ZXing.BarcodeFormat.CODE_93,
+                ZXing.BarcodeFormat.CODABAR,
+                ZXing.BarcodeFormat.EAN_13,
+                ZXing.BarcodeFormat.EAN_8,
+                ZXing.BarcodeFormat.UPC_A,
+                ZXing.BarcodeFormat.UPC_E,
+                ZXing.BarcodeFormat.ITF,
+                ZXing.BarcodeFormat.QR_CODE,
+                ZXing.BarcodeFormat.DATA_MATRIX,
+                ZXing.BarcodeFormat.AZTEC,
+                ZXing.BarcodeFormat.PDF_417
+            ];
+            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+            hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+            this._hints = hints;
 
-            if (this.devices.length === 0) {
+            this.codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+            const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
+
+            if (!devices || devices.length === 0) {
                 this.actualizarStatus('No se encontraron cámaras disponibles', 'error');
                 return;
             }
 
-            // Preferir cámara trasera
-            this.currentDeviceIndex = this.devices.findIndex(d =>
-                /back|rear|environment|trasera/i.test(d.label)
+            this.devices = devices;
+
+            const backIndex = devices.findIndex(d =>
+                /back|rear|environment|trasera|posterior/i.test(d.label)
             );
-            if (this.currentDeviceIndex === -1) this.currentDeviceIndex = 0;
+
+            this.currentDeviceIndex = backIndex !== -1
+                ? backIndex
+                : (devices.length > 1 ? devices.length - 1 : 0);
 
             await this.iniciarLectura();
 
         } catch (err) {
             console.error('Error al iniciar escáner:', err);
-            this.actualizarStatus('Error al acceder a la cámara: ' + err.message, 'error');
+            this.manejarError(err);
         }
     },
 
     async iniciarLectura() {
-        const deviceId = this.devices[this.currentDeviceIndex].deviceId;
+        const device = this.devices[this.currentDeviceIndex];
         this.isScanning = true;
-        this.actualizarStatus('Apunta la cámara al código...', 'info');
+        this.actualizarStatus('Apunta la cámara al código de barras...', 'info');
+
+        const constraints = {
+            deviceId: { exact: device.deviceId },
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+        };
 
         try {
-            this.codeReader.decodeFromVideoDevice(
-                deviceId,
+            // 1. Obtener el stream directamente
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                video: constraints,
+                audio: false
+            });
+
+            this.videoElement.srcObject = this.stream;
+            await this.videoElement.play();
+
+            // 2. Obtener el track para controlar el enfoque
+            this.track = this.stream.getVideoTracks()[0];
+
+            // 3. Aplicar enfoque continuo
+            await this.forzarEnfoqueContinuo();
+
+            // 4. Esperar estabilización
+            await new Promise(r => setTimeout(r, 800));
+
+            // 5. Decodificar desde el stream existente
+            this.codeReader.decodeFromStream(
+                this.stream,
                 this.videoElement,
                 (result, error) => {
                     if (result && this.isScanning) {
@@ -312,15 +365,126 @@ const Scanner = {
                 }
             );
 
-            // Guardar stream para linterna
-            setTimeout(() => {
-                if (this.videoElement.srcObject) {
-                    this.stream = this.videoElement.srcObject;
-                }
-            }, 500);
+            // 6. Reenfocar después de un momento
+            setTimeout(() => this.forzarEnfoque(), 1200);
 
         } catch (err) {
-            console.error('Error al leer:', err);
+            console.error('Error en decodeFromStream, intentando fallback:', err);
+
+            try {
+                await this.codeReader.decodeFromConstraints(
+                    { video: constraints },
+                    this.videoElement,
+                    (result, error) => {
+                        if (result && this.isScanning) {
+                            this.onDetectado(result.getText());
+                        }
+                    }
+                );
+
+                setTimeout(() => {
+                    if (this.videoElement.srcObject) {
+                        this.stream = this.videoElement.srcObject;
+                        this.track = this.stream.getVideoTracks()[0];
+                        this.forzarEnfoqueContinuo();
+                    }
+                }, 500);
+
+            } catch (err2) {
+                console.error('Error en fallback:', err2);
+                this.manejarError(err2);
+            }
+        }
+    },
+
+    async forzarEnfoqueContinuo() {
+        if (!this.track) return;
+
+        try {
+            const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+            console.log('📸 Capacidades de cámara:', caps);
+
+            const advanced = [];
+
+            if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                advanced.push({ focusMode: 'continuous' });
+            }
+
+            if (caps.pointsOfInterest) {
+                advanced.push({ pointsOfInterest: [{ x: 0.5, y: 0.5 }] });
+            }
+
+            if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
+                advanced.push({ exposureMode: 'continuous' });
+            }
+
+            if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
+                advanced.push({ whiteBalanceMode: 'continuous' });
+            }
+
+            if (caps.zoom && caps.zoom.min !== undefined) {
+                const zoomIdeal = Math.min(caps.zoom.max || 1, Math.max(caps.zoom.min, 1.5));
+                advanced.push({ zoom: zoomIdeal });
+            }
+
+            if (advanced.length > 0) {
+                await this.track.applyConstraints({ advanced });
+                console.log('✅ Restricciones aplicadas:', advanced);
+            }
+        } catch (err) {
+            console.warn('No se pudo forzar enfoque continuo:', err.message);
+        }
+    },
+
+    async forzarEnfoque() {
+        if (!this.track) return;
+
+        try {
+            const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+
+            if (caps.focusMode && caps.focusMode.includes('single-shot')) {
+                await this.track.applyConstraints({
+                    advanced: [{ focusMode: 'single-shot' }]
+                });
+
+                await new Promise(r => setTimeout(r, 200));
+
+                if (caps.focusMode.includes('continuous')) {
+                    await this.track.applyConstraints({
+                        advanced: [{ focusMode: 'continuous' }]
+                    });
+                }
+            }
+
+            if (navigator.vibrate) {
+                navigator.vibrate(30);
+            }
+
+            this.actualizarStatus('🎯 Reenfocando...', 'info');
+            setTimeout(() => {
+                if (this.isScanning) {
+                    this.actualizarStatus('Apunta la cámara al código de barras...', 'info');
+                }
+            }, 800);
+
+        } catch (err) {
+            console.warn('No se pudo reenfocar:', err.message);
+            mostrarToast('Tu cámara no permite reenfoque manual', 'warning');
+        }
+    },
+
+    manejarError(err) {
+        const msg = (err.message || '').toLowerCase();
+
+        if (msg.includes('permission') || msg.includes('denied') || msg.includes('notallowed')) {
+            this.actualizarStatus('Permiso de cámara denegado. Actívalo en los ajustes del navegador.', 'error');
+        } else if (msg.includes('notfound') || msg.includes('no camera')) {
+            this.actualizarStatus('No se encontró ninguna cámara', 'error');
+        } else if (msg.includes('notreadable') || msg.includes('trackstart')) {
+            this.actualizarStatus('La cámara está siendo usada por otra app. Ciérrala e intenta de nuevo.', 'error');
+        } else if (msg.includes('secure') || msg.includes('https')) {
+            this.actualizarStatus('Se requiere HTTPS para acceder a la cámara', 'error');
+        } else {
             this.actualizarStatus('Error: ' + err.message, 'error');
         }
     },
@@ -352,24 +516,23 @@ const Scanner = {
 
         this.detener();
         this.currentDeviceIndex = (this.currentDeviceIndex + 1) % this.devices.length;
-        this.codeReader = new ZXing.BrowserMultiFormatReader();
+        this.codeReader = new ZXing.BrowserMultiFormatReader(this._hints);
 
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 300));
         await this.iniciarLectura();
     },
 
     async toggleLinterna() {
         try {
-            if (!this.stream && this.videoElement.srcObject) {
-                this.stream = this.videoElement.srcObject;
+            if (!this.track && this.stream) {
+                this.track = this.stream.getVideoTracks()[0];
             }
-            if (!this.stream) {
+            if (!this.track) {
                 mostrarToast('No se puede acceder a la cámara', 'warning');
                 return;
             }
 
-            const track = this.stream.getVideoTracks()[0];
-            const caps = track.getCapabilities ? track.getCapabilities() : {};
+            const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
 
             if (!caps.torch) {
                 mostrarToast('Esta cámara no soporta linterna', 'warning');
@@ -377,7 +540,7 @@ const Scanner = {
             }
 
             this._linterna = !this._linterna;
-            await track.applyConstraints({ advanced: [{ torch: this._linterna }] });
+            await this.track.applyConstraints({ advanced: [{ torch: this._linterna }] });
             document.getElementById('btnLinterna').classList.toggle('active', this._linterna);
 
         } catch (err) {
@@ -442,6 +605,7 @@ const Scanner = {
         }
 
         this.stream = null;
+        this.track = null;
         this._linterna = false;
 
         cerrarModal(document.getElementById('modalScanner'));
