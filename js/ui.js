@@ -38,6 +38,61 @@ const DOM = {
 };
 
 // ============================================================
+// CONSULTA AL FABRICANTE (Colombia)
+// ============================================================
+
+function consultarFabricante(marca, serial) {
+    const marcaNorm = (marca || '').toLowerCase().trim();
+    const s = encodeURIComponent((serial || '').trim());
+
+    if (!s) {
+        mostrarToast('Este dispositivo no tiene serial registrado', 'warning');
+        return;
+    }
+
+    const urls = {
+        'apple':   `https://checkcoverage.apple.com/co/es/?sn=${s}`,
+        'macbook': `https://checkcoverage.apple.com/co/es/?sn=${s}`,
+        'mac':     `https://checkcoverage.apple.com/co/es/?sn=${s}`,
+        'hp':      `https://support.hp.com/co-es/warrantycheck?serialNumber=${s}`,
+        'dell':    `https://www.dell.com/support/home/es-co/product-support/servicetag/${s}`,
+        'lenovo':  `https://pcsupport.lenovo.com/co/es/warrantylookup?serialNumber=${s}`,
+        'acer':    `https://www.acer.com/co-es/support/warranty`
+    };
+
+    let url = null;
+    let marcaEncontrada = null;
+
+    for (const key in urls) {
+        if (marcaNorm.includes(key)) {
+            url = urls[key];
+            marcaEncontrada = key;
+            break;
+        }
+    }
+
+    if (!url) {
+        mostrarToast(`Marca "${marca}" no soportada para consulta automática`, 'warning');
+        return;
+    }
+
+    // Copiar serial al portapapeles (útil para HP, Lenovo, Acer)
+    try {
+        navigator.clipboard.writeText(serial);
+    } catch (e) { /* ignorar */ }
+
+    // Abrir en nueva pestaña
+    window.open(url, '_blank', 'noopener,noreferrer');
+
+    // Mensaje según el fabricante
+    if (['hp', 'lenovo', 'acer'].includes(marcaEncontrada)) {
+        mostrarToast(`Serial copiado. Pégalo (Ctrl+V) en la página de ${marca}`, 'info');
+    } else if (marcaEncontrada === 'apple' || marcaEncontrada === 'dell') {
+        mostrarToast(`Abriendo información de ${marca}...`, 'success');
+    }
+}
+
+// ============================================================
 // RENDERIZADO
 // ============================================================
 
@@ -73,6 +128,9 @@ function renderizarInventario(items) {
                 <td data-label="Estado"><span class="estado-badge estado-${item.estado}">${item.estado}</span></td>
                 <td data-label="Acciones">
                     <div class="acciones-btns">
+                        <button class="btn-icon btn-info" onclick="consultarFabricante('${(item.marca || '').replace(/'/g, "\\'")}', '${(item.serial || '').replace(/'/g, "\\'")}')" title="Ver info oficial">
+                            <i class="fas fa-external-link-alt"></i>
+                        </button>
                         <button class="btn-icon btn-edit" onclick="editarDispositivo(${item.id})" title="Editar">
                             <i class="fas fa-edit"></i>
                         </button>
