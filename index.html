@@ -36,17 +36,17 @@
                         </button>
                     </div>
                 </div>
-                
+
                 <!-- Importar JSON -->
                 <button class="btn btn-secondary" id="btnImportar">
                     <i class="fas fa-file-import"></i> Importar JSON
                 </button>
-                
+
                 <!-- Importar Excel -->
                 <button class="btn btn-secondary" id="btnImportarExcel" style="background: #217346; color: white;">
                     <i class="fas fa-file-excel"></i> Importar Excel
                 </button>
-                
+
                 <!-- Agregar -->
                 <button class="btn btn-primary" id="btnAgregar">
                     <i class="fas fa-plus"></i> Nuevo Dispositivo
@@ -225,8 +225,9 @@
     <!-- TOAST -->
     <div id="toastContainer"></div>
 
-    <!-- SCRIPTS -->
-    <script src="js/data.js"></script>
+    <!-- SCRIPTS (orden importante) -->
+    <script src="js/api.js"></script>
+    <script src="js/utils.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/main.js"></script>
 </body>
