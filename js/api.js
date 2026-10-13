@@ -42,21 +42,31 @@ async function apiCall(accion, datos = {}) {
             redirect: 'follow'
         });
     } catch (err) {
+        console.error('Fetch error:', err);
         throw new Error('No se pudo conectar con el servidor');
+    }
+
+    if (!response.ok) {
+        throw new Error(`Error del servidor (${response.status})`);
     }
 
     let result;
     try {
         result = await response.json();
     } catch (err) {
+        console.error('JSON parse error:', err);
         throw new Error('Respuesta inválida del servidor');
     }
 
     if (!result.success) {
-        // Si el token expiró, redirigir a login
+        // Si el token expiró, limpiar sesión y redirigir
         if (result.mensaje && /sesi[oó]n/i.test(result.mensaje)) {
+            console.warn('Sesión expirada, redirigiendo a login...');
             clearSession();
-            window.location.href = 'login.html';
+            // Solo redirigir si NO estamos ya en login
+            if (!window.location.pathname.includes('login.html')) {
+                window.location.href = 'login.html';
+            }
         }
         throw new Error(result.mensaje || 'Error desconocido');
     }
@@ -129,5 +139,22 @@ const API = {
 
     async eliminarUsuario(id) {
         return await apiCall('eliminarUsuario', { token: getToken(), id });
+    }
+}
+
+// ============================================================
+// VERIFICAR SESIÓN (opcional, para validar antes de cargar)
+// ============================================================
+async function verificarSesion() {
+    const token = getToken();
+    if (!token) return false;
+
+    try {
+        // Hacemos una llamada ligera al backend
+        await apiCall('obtenerInventario', { token });
+        return true;
+    } catch (error) {
+        console.warn('Sesión inválida:', error.message);
+        return false;
     }
 };
