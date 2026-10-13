@@ -248,8 +248,9 @@ function leerArchivoExcel(file) {
 }
 
 // ============================================================
-// ESCÁNER DE CÓDIGOS - VERSIÓN FINAL
-// Soporta: PC (webcam) + Celular + Códigos 1D y 2D
+// ESCÁNER DE CÓDIGOS - VERSIÓN FINAL CON VALIDACIÓN S/N
+// Soporta: PC (webcam) + Celular + códigos 1D y 2D
+// Filtra códigos que NO son S/N (P/N, MAC, UUID, etc.)
 // ============================================================
 
 const Scanner = {
@@ -263,7 +264,6 @@ const Scanner = {
     track: null,
     _linterna: false,
     _hints: null,
-    _detectionLoop: null,
     _isMobile: false,
 
     // ------------------------------------------------------------
@@ -275,7 +275,6 @@ const Scanner = {
             return;
         }
 
-        // Detectar si es móvil
         this._isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
         console.log('📱 Es móvil:', this._isMobile);
 
@@ -286,13 +285,11 @@ const Scanner = {
         this.actualizarStatus('Iniciando cámara...', 'info');
 
         try {
-            // 🎯 Hints optimizados para códigos 1D (barras) y 2D
+            // Hints optimizados
             const hints = new Map();
-
             const formats = [
-                // Códigos de barras 1D (prioritarios para seriales)
-                ZXing.BarcodeFormat.CODE_128,   // HP, Dell, Lenovo
-                ZXing.BarcodeFormat.CODE_39,    // Equipos industriales
+                ZXing.BarcodeFormat.CODE_128,
+                ZXing.BarcodeFormat.CODE_39,
                 ZXing.BarcodeFormat.CODE_93,
                 ZXing.BarcodeFormat.ITF,
                 ZXing.BarcodeFormat.CODABAR,
@@ -300,7 +297,6 @@ const Scanner = {
                 ZXing.BarcodeFormat.EAN_8,
                 ZXing.BarcodeFormat.UPC_A,
                 ZXing.BarcodeFormat.UPC_E,
-                // Códigos 2D
                 ZXing.BarcodeFormat.QR_CODE,
                 ZXing.BarcodeFormat.DATA_MATRIX,
                 ZXing.BarcodeFormat.PDF_417,
@@ -315,7 +311,7 @@ const Scanner = {
 
             this.codeReader = new ZXing.BrowserMultiFormatReader(hints);
 
-            // Listar cámaras disponibles
+            // Listar cámaras
             const devices = await this.codeReader.listVideoInputDevices();
             console.log('📸 Cámaras detectadas:', devices);
 
@@ -326,26 +322,21 @@ const Scanner = {
 
             this.devices = devices;
 
-            // 🎯 Selección inteligente de cámara:
-            // - En móvil: preferir trasera (mejor resolución/enfoque)
-            // - En PC: preferir la que NO sea "front" o "integrada" si hay varias
+            // Selección inteligente de cámara
             let targetIndex = 0;
 
             if (this._isMobile) {
-                // Buscar cámara trasera
                 targetIndex = devices.findIndex(d =>
                     /back|rear|environment|trasera|posterior/i.test(d.label)
                 );
                 if (targetIndex === -1) targetIndex = devices.length - 1;
             } else {
-                // En PC, buscar cámara externa (suele tener mejor calidad)
                 const external = devices.findIndex(d =>
                     /usb|hd|external|logitech|webcam hd/i.test(d.label)
                 );
                 if (external !== -1) {
                     targetIndex = external;
                 } else {
-                    // Si no, la última (en Windows suele ser la buena)
                     targetIndex = devices.length > 1 ? devices.length - 1 : 0;
                 }
             }
@@ -369,11 +360,10 @@ const Scanner = {
         this.isScanning = true;
 
         const mensajeInicial = this._isMobile
-            ? 'Apunta al código de barras (líneas verticales)'
-            : 'Muestra el código de barras a la webcam';
+            ? 'Apunta al S/N (no al P/N ni Product)'
+            : 'Muestra el código S/N a la webcam';
         this.actualizarStatus(mensajeInicial, 'info');
 
-        // 🎯 Constraints según dispositivo
         const constraints = {
             deviceId: { exact: device.deviceId },
             width: { ideal: this._isMobile ? 1920 : 1280, min: 640 },
@@ -381,7 +371,6 @@ const Scanner = {
             frameRate: { ideal: 30, min: 15 }
         };
 
-        // En móvil forzamos cámara trasera
         if (this._isMobile) {
             constraints.facingMode = 'environment';
         }
@@ -397,27 +386,22 @@ const Scanner = {
 
             this.track = this.stream.getVideoTracks()[0];
 
-            // Aplicar optimizaciones
             await this.optimizarCamara();
 
-            // Esperar estabilización
             await new Promise(r => setTimeout(r, 700));
 
-            // 🎯 Decodificar con TRY_HARDER y bucle continuo
             this.codeReader.decodeFromStream(
                 this.stream,
                 this.videoElement,
                 (result, error) => {
                     if (result && this.isScanning) {
                         const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()] || 'DESCONOCIDO';
-                        console.log('✅ Código detectado:', result.getText(), '| Formato:', formato);
+                        console.log('👁️ Código leído:', result.getText(), '| Formato:', formato);
                         this.onDetectado(result.getText());
                     }
-                    // Los errores por frame son normales, se ignoran
                 }
             );
 
-            // Reenfocar automáticamente después de un momento
             setTimeout(() => this.forzarEnfoque(), 1000);
 
         } catch (err) {
@@ -427,7 +411,58 @@ const Scanner = {
     },
 
     // ------------------------------------------------------------
-    // OPTIMIZAR CÁMARA (según PC o móvil)
+    // VALIDAR SI EL CÓDIGO ES UN SERIAL VÁLIDO
+    // ------------------------------------------------------------
+    esSerialValido(texto) {
+        if (!texto || texto.trim().length === 0) return false;
+
+        const t = texto.trim();
+
+        // ❌ Patrones que NO son seriales (descartar)
+        const patronesInvalidos = [
+            /^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/i,      // MAC Address (con : o -)
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i,   // UUID
+            /#/,                                         // P/N de HP (contiene #)
+            /^[0-9]{12,14}$/,                            // EAN-13/UPC puro (solo números)
+            /^https?:\/\//i,                             // URLs
+            /^www\./i,                                   // URLs sin protocolo
+            /^[A-Z]{3}\d{4}[A-Z0-9]*#/i,                 // Product Number HP con #
+            /^[A-Z0-9]+\/[A-Z0-9]+$/i,                   // Formatos con / (fechas, etc.)
+            /^\d{2}\/\d{2}\/\d{4}$/,                     // Fechas DD/MM/YYYY
+            /^[A-Z]{2,3}\d{6,}$/                         // EAN-like sin contexto
+        ];
+
+        // Formatos claramente no-serial
+        if (patronesInvalidos.some(p => p.test(t))) {
+            // Excepción: algunos EAN pueden ser seriales, así que solo descartamos
+            // si además NO empiezan con prefijos HP conocidos
+            const prefijosHP = /^(5CD|5CG|CZC|MXL|8CG|5CB|CN[A-Z])/i;
+            if (!prefijosHP.test(t)) {
+                return false;
+            }
+        }
+
+        // ✅ Longitud mínima razonable para seriales (6 chars)
+        if (t.length < 6) return false;
+
+        // ✅ Longitud máxima razonable (30 chars)
+        if (t.length > 30) return false;
+
+        // ✅ Debe tener al menos 2 letras Y 2 números (o ser muy alfanumérico)
+        const tieneLetras = /[A-Z]/i.test(t);
+        const tieneNumeros = /\d/.test(t);
+
+        if (!tieneLetras || !tieneNumeros) {
+            // Algunos seriales pueden ser solo numéricos o solo letras
+            // pero son raros, así que damos un poco de margen
+            if (t.length < 8) return false;
+        }
+
+        return true;
+    },
+
+    // ------------------------------------------------------------
+    // OPTIMIZAR CÁMARA
     // ------------------------------------------------------------
     async optimizarCamara() {
         if (!this.track) return;
@@ -438,29 +473,24 @@ const Scanner = {
 
             const advanced = [];
 
-            // Enfoque continuo (si está disponible)
             if (caps.focusMode && caps.focusMode.includes('continuous')) {
                 advanced.push({ focusMode: 'continuous' });
             }
 
-            // Exposición continua
             if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
                 advanced.push({ exposureMode: 'continuous' });
             }
 
-            // Balance de blancos continuo
             if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
                 advanced.push({ whiteBalanceMode: 'continuous' });
             }
 
-            // Zoom: solo en móvil, para códigos pequeños
             if (this._isMobile && caps.zoom && caps.zoom.max >= 1.5) {
                 const zoom = Math.min(caps.zoom.max, 1.5);
                 advanced.push({ zoom });
                 console.log('🔍 Zoom aplicado:', zoom + 'x');
             }
 
-            // Nitidez máxima (si existe)
             if (caps.sharpness && caps.sharpness.max !== undefined) {
                 advanced.push({ sharpness: caps.sharpness.max });
             }
@@ -503,8 +533,8 @@ const Scanner = {
                     if (this.isScanning) {
                         this.actualizarStatus(
                             this._isMobile
-                                ? 'Apunta al código de barras (líneas verticales)'
-                                : 'Muestra el código de barras a la webcam',
+                                ? 'Apunta al S/N (no al P/N ni Product)'
+                                : 'Muestra el código S/N a la webcam',
                             'info'
                         );
                     }
@@ -533,33 +563,66 @@ const Scanner = {
         } else if (msg.includes('secure') || msg.includes('https')) {
             this.actualizarStatus('Se requiere HTTPS para acceder a la cámara.', 'error');
         } else if (msg.includes('overconstrained')) {
-            this.actualizarStatus('La cámara no soporta la resolución solicitada. Intenta de nuevo.', 'error');
+            this.actualizarStatus('La cámara no soporta la resolución solicitada.', 'error');
         } else {
             this.actualizarStatus('Error: ' + err.message, 'error');
         }
     },
 
     // ------------------------------------------------------------
-    // DETECCIÓN EXITOSA
+    // DETECCIÓN EXITOSA (con validación de S/N)
     // ------------------------------------------------------------
     onDetectado(texto) {
         if (!this.isScanning) return;
+
+        const textoLimpio = texto.trim();
+        console.log('🔍 Evaluando código:', textoLimpio, '| Válido:', this.esSerialValido(textoLimpio));
+
+        // 🚫 VALIDACIÓN: descartar códigos que NO son seriales
+        if (!this.esSerialValido(textoLimpio)) {
+            console.warn('⚠️ Código descartado (no parece S/N):', textoLimpio);
+
+            this.actualizarStatus(
+                '⚠️ Ese no es el S/N. Busca el código que dice "S/N" o "Serial Number"',
+                'error'
+            );
+
+            if (navigator.vibrate) {
+                navigator.vibrate([200, 100, 200, 100, 200]);
+            }
+
+            // Reactivar después de 2.5s
+            setTimeout(() => {
+                if (!this.isScanning) {
+                    this.isScanning = true;
+                    this.actualizarStatus(
+                        this._isMobile
+                            ? 'Apunta al S/N (no al P/N ni Product)'
+                            : 'Muestra el código S/N a la webcam',
+                        'info'
+                    );
+                }
+            }, 2500);
+
+            return;
+        }
+
+        // ✅ Código válido
         this.isScanning = false;
 
         const wrap = document.querySelector('.scanner-video-wrap');
         wrap?.classList.add('detected');
 
-        // Vibración en móvil
         if (navigator.vibrate) {
             navigator.vibrate([80, 40, 80]);
         }
         this.reproducirBeep();
 
-        this.actualizarStatus('¡Detectado! ' + texto, 'success');
+        this.actualizarStatus('✅ S/N detectado: ' + textoLimpio, 'success');
 
-        if (this.callback) this.callback(texto.trim());
+        if (this.callback) this.callback(textoLimpio);
 
-        setTimeout(() => this.cerrar(), 700);
+        setTimeout(() => this.cerrar(), 800);
     },
 
     // ------------------------------------------------------------
@@ -613,7 +676,7 @@ const Scanner = {
     },
 
     // ------------------------------------------------------------
-    // BEEP DE CONFIRMACIÓN
+    // BEEP
     // ------------------------------------------------------------
     reproducirBeep() {
         try {
@@ -640,7 +703,7 @@ const Scanner = {
     },
 
     // ------------------------------------------------------------
-    // ACTUALIZAR MENSAJE DE ESTADO
+    // ACTUALIZAR STATUS
     // ------------------------------------------------------------
     actualizarStatus(mensaje, tipo = 'info') {
         const el = document.getElementById('scannerStatus');

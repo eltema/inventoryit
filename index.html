@@ -21,7 +21,6 @@
                 <span class="badge" id="totalItems">0</span>
             </div>
             <div class="header-right">
-                <!-- Exportar Dropdown -->
                 <div class="btn-group">
                     <button class="btn btn-secondary dropdown-toggle" id="btnExportarDropdown">
                         <i class="fas fa-file-export"></i> Exportar ▼
@@ -39,17 +38,14 @@
                     </div>
                 </div>
 
-                <!-- Importar JSON -->
                 <button class="btn btn-secondary" id="btnImportar">
                     <i class="fas fa-file-import"></i> Importar JSON
                 </button>
 
-                <!-- Importar Excel -->
                 <button class="btn btn-secondary" id="btnImportarExcel" style="background: #217346; color: white;">
                     <i class="fas fa-file-excel"></i> Importar Excel
                 </button>
 
-                <!-- Agregar -->
                 <button class="btn btn-primary" id="btnAgregar">
                     <i class="fas fa-plus"></i> Nuevo Dispositivo
                 </button>
@@ -177,11 +173,14 @@
                     <div class="form-group">
                         <label for="formSerial">Serial *</label>
                         <div class="input-with-btn">
-                            <input type="text" id="formSerial" placeholder="Número de serie" required>
+                            <input type="text" id="formSerial" placeholder="S/N del equipo" required>
                             <button type="button" class="btn-scan" id="btnEscanearSerial" title="Escanear con cámara">
                                 <i class="fas fa-camera"></i>
                             </button>
                         </div>
+                        <small style="color: #64748b; font-size: 0.75rem; margin-top: 4px; display: block;">
+                            💡 En HP: usa el código <strong>S/N</strong>, no el P/N ni Product
+                        </small>
                     </div>
                 </div>
                 <div class="form-row">
@@ -233,7 +232,7 @@
     <div class="modal" id="modalScanner">
         <div class="modal-content modal-scanner">
             <div class="modal-header">
-                <h2><i class="fas fa-camera"></i> Escanear serial</h2>
+                <h2><i class="fas fa-camera"></i> Escanear Serial (S/N)</h2>
                 <button class="modal-close" id="btnCerrarScanner">&times;</button>
             </div>
 
@@ -254,8 +253,23 @@
                 <div class="scanner-info">
                     <p id="scannerStatus">
                         <i class="fas fa-info-circle"></i>
-                        Apunta la cámara al código de barras o QR
+                        Apunta al código <strong>S/N</strong> (junto a "Serial Number")
                     </p>
+
+                    <div style="
+                        padding: 10px 14px;
+                        background: rgba(99, 102, 241, 0.08);
+                        border: 1px solid rgba(99, 102, 241, 0.2);
+                        border-radius: 10px;
+                        font-size: 0.8rem;
+                        color: #4f46e5;
+                        margin-bottom: 14px;
+                        line-height: 1.4;
+                    ">
+                        <strong>💡 En etiquetas HP:</strong><br>
+                        ✅ Usa el código <strong>S/N</strong> o <strong>Serial Number</strong><br>
+                        ❌ NO uses el <strong>P/N</strong> (tiene <code>#</code>) ni el <strong>Product</strong>
+                    </div>
 
                     <div class="scanner-actions">
                         <button type="button" class="btn btn-secondary" id="btnEnfocar">
@@ -276,7 +290,7 @@
     <!-- TOAST -->
     <div id="toastContainer"></div>
 
-    <!-- SCRIPTS (orden importante) -->
+    <!-- SCRIPTS -->
     <script src="js/api.js"></script>
     <script src="js/utils.js"></script>
     <script src="js/ui.js"></script>
