@@ -248,7 +248,8 @@ function leerArchivoExcel(file) {
 }
 
 // ============================================================
-// ESCÁNER DE CÓDIGOS CON CÁMARA (v3 - enfoque mejorado)
+// ESCÁNER DE CÓDIGOS - VERSIÓN FINAL
+// Soporta: PC (webcam) + Celular + Códigos 1D y 2D
 // ============================================================
 
 const Scanner = {
@@ -262,12 +263,21 @@ const Scanner = {
     track: null,
     _linterna: false,
     _hints: null,
+    _detectionLoop: null,
+    _isMobile: false,
 
+    // ------------------------------------------------------------
+    // ABRIR ESCÁNER
+    // ------------------------------------------------------------
     async abrir(onDetected) {
         if (typeof ZXing === 'undefined') {
             mostrarToast('Librería de escaneo no cargada. Revisa tu conexión.', 'error');
             return;
         }
+
+        // Detectar si es móvil
+        this._isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+        console.log('📱 Es móvil:', this._isMobile);
 
         this.callback = onDetected;
         this.videoElement = document.getElementById('scannerVideo');
@@ -276,29 +286,38 @@ const Scanner = {
         this.actualizarStatus('Iniciando cámara...', 'info');
 
         try {
+            // 🎯 Hints optimizados para códigos 1D (barras) y 2D
             const hints = new Map();
+
             const formats = [
-                ZXing.BarcodeFormat.CODE_128,
-                ZXing.BarcodeFormat.CODE_39,
+                // Códigos de barras 1D (prioritarios para seriales)
+                ZXing.BarcodeFormat.CODE_128,   // HP, Dell, Lenovo
+                ZXing.BarcodeFormat.CODE_39,    // Equipos industriales
                 ZXing.BarcodeFormat.CODE_93,
+                ZXing.BarcodeFormat.ITF,
                 ZXing.BarcodeFormat.CODABAR,
                 ZXing.BarcodeFormat.EAN_13,
                 ZXing.BarcodeFormat.EAN_8,
                 ZXing.BarcodeFormat.UPC_A,
                 ZXing.BarcodeFormat.UPC_E,
-                ZXing.BarcodeFormat.ITF,
+                // Códigos 2D
                 ZXing.BarcodeFormat.QR_CODE,
                 ZXing.BarcodeFormat.DATA_MATRIX,
-                ZXing.BarcodeFormat.AZTEC,
-                ZXing.BarcodeFormat.PDF_417
+                ZXing.BarcodeFormat.PDF_417,
+                ZXing.BarcodeFormat.AZTEC
             ];
+
             hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
             hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+            hints.set(ZXing.DecodeHintType.CHARACTER_SET, 'UTF-8');
+            hints.set(ZXing.DecodeHintType.ALSO_INVERTED, true);
             this._hints = hints;
 
             this.codeReader = new ZXing.BrowserMultiFormatReader(hints);
 
-            const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
+            // Listar cámaras disponibles
+            const devices = await this.codeReader.listVideoInputDevices();
+            console.log('📸 Cámaras detectadas:', devices);
 
             if (!devices || devices.length === 0) {
                 this.actualizarStatus('No se encontraron cámaras disponibles', 'error');
@@ -307,13 +326,32 @@ const Scanner = {
 
             this.devices = devices;
 
-            const backIndex = devices.findIndex(d =>
-                /back|rear|environment|trasera|posterior/i.test(d.label)
-            );
+            // 🎯 Selección inteligente de cámara:
+            // - En móvil: preferir trasera (mejor resolución/enfoque)
+            // - En PC: preferir la que NO sea "front" o "integrada" si hay varias
+            let targetIndex = 0;
 
-            this.currentDeviceIndex = backIndex !== -1
-                ? backIndex
-                : (devices.length > 1 ? devices.length - 1 : 0);
+            if (this._isMobile) {
+                // Buscar cámara trasera
+                targetIndex = devices.findIndex(d =>
+                    /back|rear|environment|trasera|posterior/i.test(d.label)
+                );
+                if (targetIndex === -1) targetIndex = devices.length - 1;
+            } else {
+                // En PC, buscar cámara externa (suele tener mejor calidad)
+                const external = devices.findIndex(d =>
+                    /usb|hd|external|logitech|webcam hd/i.test(d.label)
+                );
+                if (external !== -1) {
+                    targetIndex = external;
+                } else {
+                    // Si no, la última (en Windows suele ser la buena)
+                    targetIndex = devices.length > 1 ? devices.length - 1 : 0;
+                }
+            }
+
+            this.currentDeviceIndex = targetIndex;
+            console.log('🎯 Cámara seleccionada:', devices[targetIndex].label);
 
             await this.iniciarLectura();
 
@@ -323,20 +361,32 @@ const Scanner = {
         }
     },
 
+    // ------------------------------------------------------------
+    // INICIAR LECTURA
+    // ------------------------------------------------------------
     async iniciarLectura() {
         const device = this.devices[this.currentDeviceIndex];
         this.isScanning = true;
-        this.actualizarStatus('Apunta la cámara al código de barras...', 'info');
 
+        const mensajeInicial = this._isMobile
+            ? 'Apunta al código de barras (líneas verticales)'
+            : 'Muestra el código de barras a la webcam';
+        this.actualizarStatus(mensajeInicial, 'info');
+
+        // 🎯 Constraints según dispositivo
         const constraints = {
             deviceId: { exact: device.deviceId },
-            facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: this._isMobile ? 1920 : 1280, min: 640 },
+            height: { ideal: this._isMobile ? 1080 : 720, min: 480 },
+            frameRate: { ideal: 30, min: 15 }
         };
 
+        // En móvil forzamos cámara trasera
+        if (this._isMobile) {
+            constraints.facingMode = 'environment';
+        }
+
         try {
-            // 1. Obtener el stream directamente
             this.stream = await navigator.mediaDevices.getUserMedia({
                 video: constraints,
                 audio: false
@@ -345,97 +395,89 @@ const Scanner = {
             this.videoElement.srcObject = this.stream;
             await this.videoElement.play();
 
-            // 2. Obtener el track para controlar el enfoque
             this.track = this.stream.getVideoTracks()[0];
 
-            // 3. Aplicar enfoque continuo
-            await this.forzarEnfoqueContinuo();
+            // Aplicar optimizaciones
+            await this.optimizarCamara();
 
-            // 4. Esperar estabilización
-            await new Promise(r => setTimeout(r, 800));
+            // Esperar estabilización
+            await new Promise(r => setTimeout(r, 700));
 
-            // 5. Decodificar desde el stream existente
+            // 🎯 Decodificar con TRY_HARDER y bucle continuo
             this.codeReader.decodeFromStream(
                 this.stream,
                 this.videoElement,
                 (result, error) => {
                     if (result && this.isScanning) {
+                        const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()] || 'DESCONOCIDO';
+                        console.log('✅ Código detectado:', result.getText(), '| Formato:', formato);
                         this.onDetectado(result.getText());
                     }
+                    // Los errores por frame son normales, se ignoran
                 }
             );
 
-            // 6. Reenfocar después de un momento
-            setTimeout(() => this.forzarEnfoque(), 1200);
+            // Reenfocar automáticamente después de un momento
+            setTimeout(() => this.forzarEnfoque(), 1000);
 
         } catch (err) {
-            console.error('Error en decodeFromStream, intentando fallback:', err);
-
-            try {
-                await this.codeReader.decodeFromConstraints(
-                    { video: constraints },
-                    this.videoElement,
-                    (result, error) => {
-                        if (result && this.isScanning) {
-                            this.onDetectado(result.getText());
-                        }
-                    }
-                );
-
-                setTimeout(() => {
-                    if (this.videoElement.srcObject) {
-                        this.stream = this.videoElement.srcObject;
-                        this.track = this.stream.getVideoTracks()[0];
-                        this.forzarEnfoqueContinuo();
-                    }
-                }, 500);
-
-            } catch (err2) {
-                console.error('Error en fallback:', err2);
-                this.manejarError(err2);
-            }
+            console.error('Error al iniciar lectura:', err);
+            this.manejarError(err);
         }
     },
 
-    async forzarEnfoqueContinuo() {
+    // ------------------------------------------------------------
+    // OPTIMIZAR CÁMARA (según PC o móvil)
+    // ------------------------------------------------------------
+    async optimizarCamara() {
         if (!this.track) return;
 
         try {
             const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
-            console.log('📸 Capacidades de cámara:', caps);
+            console.log('📸 Capacidades de la cámara:', caps);
 
             const advanced = [];
 
+            // Enfoque continuo (si está disponible)
             if (caps.focusMode && caps.focusMode.includes('continuous')) {
                 advanced.push({ focusMode: 'continuous' });
             }
 
-            if (caps.pointsOfInterest) {
-                advanced.push({ pointsOfInterest: [{ x: 0.5, y: 0.5 }] });
-            }
-
+            // Exposición continua
             if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
                 advanced.push({ exposureMode: 'continuous' });
             }
 
+            // Balance de blancos continuo
             if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
                 advanced.push({ whiteBalanceMode: 'continuous' });
             }
 
-            if (caps.zoom && caps.zoom.min !== undefined) {
-                const zoomIdeal = Math.min(caps.zoom.max || 1, Math.max(caps.zoom.min, 1.5));
-                advanced.push({ zoom: zoomIdeal });
+            // Zoom: solo en móvil, para códigos pequeños
+            if (this._isMobile && caps.zoom && caps.zoom.max >= 1.5) {
+                const zoom = Math.min(caps.zoom.max, 1.5);
+                advanced.push({ zoom });
+                console.log('🔍 Zoom aplicado:', zoom + 'x');
+            }
+
+            // Nitidez máxima (si existe)
+            if (caps.sharpness && caps.sharpness.max !== undefined) {
+                advanced.push({ sharpness: caps.sharpness.max });
             }
 
             if (advanced.length > 0) {
                 await this.track.applyConstraints({ advanced });
-                console.log('✅ Restricciones aplicadas:', advanced);
+                console.log('✅ Optimizaciones aplicadas:', advanced);
             }
+
         } catch (err) {
-            console.warn('No se pudo forzar enfoque continuo:', err.message);
+            console.warn('No se pudieron aplicar todas las optimizaciones:', err.message);
         }
     },
 
+    // ------------------------------------------------------------
+    // FORZAR ENFOQUE MANUAL
+    // ------------------------------------------------------------
     async forzarEnfoque() {
         if (!this.track) return;
 
@@ -447,48 +489,59 @@ const Scanner = {
                     advanced: [{ focusMode: 'single-shot' }]
                 });
 
-                await new Promise(r => setTimeout(r, 200));
+                await new Promise(r => setTimeout(r, 250));
 
                 if (caps.focusMode.includes('continuous')) {
                     await this.track.applyConstraints({
                         advanced: [{ focusMode: 'continuous' }]
                     });
                 }
-            }
 
-            if (navigator.vibrate) {
-                navigator.vibrate(30);
+                if (navigator.vibrate) navigator.vibrate(30);
+                this.actualizarStatus('🎯 Reenfocando...', 'info');
+                setTimeout(() => {
+                    if (this.isScanning) {
+                        this.actualizarStatus(
+                            this._isMobile
+                                ? 'Apunta al código de barras (líneas verticales)'
+                                : 'Muestra el código de barras a la webcam',
+                            'info'
+                        );
+                    }
+                }, 700);
+            } else {
+                mostrarToast('Esta cámara no permite reenfoque manual', 'warning');
             }
-
-            this.actualizarStatus('🎯 Reenfocando...', 'info');
-            setTimeout(() => {
-                if (this.isScanning) {
-                    this.actualizarStatus('Apunta la cámara al código de barras...', 'info');
-                }
-            }, 800);
 
         } catch (err) {
             console.warn('No se pudo reenfocar:', err.message);
-            mostrarToast('Tu cámara no permite reenfoque manual', 'warning');
         }
     },
 
+    // ------------------------------------------------------------
+    // MANEJO DE ERRORES
+    // ------------------------------------------------------------
     manejarError(err) {
         const msg = (err.message || '').toLowerCase();
 
         if (msg.includes('permission') || msg.includes('denied') || msg.includes('notallowed')) {
             this.actualizarStatus('Permiso de cámara denegado. Actívalo en los ajustes del navegador.', 'error');
-        } else if (msg.includes('notfound') || msg.includes('no camera')) {
-            this.actualizarStatus('No se encontró ninguna cámara', 'error');
+        } else if (msg.includes('notfound') || msg.includes('no camera') || msg.includes('devicesnotfound')) {
+            this.actualizarStatus('No se encontró ninguna cámara. Conecta una webcam o usa el celular.', 'error');
         } else if (msg.includes('notreadable') || msg.includes('trackstart')) {
             this.actualizarStatus('La cámara está siendo usada por otra app. Ciérrala e intenta de nuevo.', 'error');
         } else if (msg.includes('secure') || msg.includes('https')) {
-            this.actualizarStatus('Se requiere HTTPS para acceder a la cámara', 'error');
+            this.actualizarStatus('Se requiere HTTPS para acceder a la cámara.', 'error');
+        } else if (msg.includes('overconstrained')) {
+            this.actualizarStatus('La cámara no soporta la resolución solicitada. Intenta de nuevo.', 'error');
         } else {
             this.actualizarStatus('Error: ' + err.message, 'error');
         }
     },
 
+    // ------------------------------------------------------------
+    // DETECCIÓN EXITOSA
+    // ------------------------------------------------------------
     onDetectado(texto) {
         if (!this.isScanning) return;
         this.isScanning = false;
@@ -496,6 +549,7 @@ const Scanner = {
         const wrap = document.querySelector('.scanner-video-wrap');
         wrap?.classList.add('detected');
 
+        // Vibración en móvil
         if (navigator.vibrate) {
             navigator.vibrate([80, 40, 80]);
         }
@@ -505,9 +559,12 @@ const Scanner = {
 
         if (this.callback) this.callback(texto.trim());
 
-        setTimeout(() => this.cerrar(), 600);
+        setTimeout(() => this.cerrar(), 700);
     },
 
+    // ------------------------------------------------------------
+    // CAMBIAR CÁMARA
+    // ------------------------------------------------------------
     async cambiarCamara() {
         if (this.devices.length <= 1) {
             mostrarToast('Solo hay una cámara disponible', 'warning');
@@ -515,13 +572,19 @@ const Scanner = {
         }
 
         this.detener();
+
         this.currentDeviceIndex = (this.currentDeviceIndex + 1) % this.devices.length;
+        console.log('🔄 Cambiando a cámara:', this.devices[this.currentDeviceIndex].label);
+
         this.codeReader = new ZXing.BrowserMultiFormatReader(this._hints);
 
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 400));
         await this.iniciarLectura();
     },
 
+    // ------------------------------------------------------------
+    // LINTERNA
+    // ------------------------------------------------------------
     async toggleLinterna() {
         try {
             if (!this.track && this.stream) {
@@ -535,7 +598,7 @@ const Scanner = {
             const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
 
             if (!caps.torch) {
-                mostrarToast('Esta cámara no soporta linterna', 'warning');
+                mostrarToast('Esta cámara no soporta linterna (solo móviles con flash)', 'warning');
                 return;
             }
 
@@ -549,6 +612,9 @@ const Scanner = {
         }
     },
 
+    // ------------------------------------------------------------
+    // BEEP DE CONFIRMACIÓN
+    // ------------------------------------------------------------
     reproducirBeep() {
         try {
             const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -573,6 +639,9 @@ const Scanner = {
         } catch (e) { /* ignorar */ }
     },
 
+    // ------------------------------------------------------------
+    // ACTUALIZAR MENSAJE DE ESTADO
+    // ------------------------------------------------------------
     actualizarStatus(mensaje, tipo = 'info') {
         const el = document.getElementById('scannerStatus');
         if (!el) return;
@@ -587,6 +656,9 @@ const Scanner = {
         el.innerHTML = `<i class="fas ${iconos[tipo]}"></i> ${mensaje}`;
     },
 
+    // ------------------------------------------------------------
+    // DETENER
+    // ------------------------------------------------------------
     detener() {
         if (this.codeReader) {
             try { this.codeReader.reset(); } catch (e) { /* ignorar */ }
@@ -594,6 +666,9 @@ const Scanner = {
         this.isScanning = false;
     },
 
+    // ------------------------------------------------------------
+    // CERRAR
+    // ------------------------------------------------------------
     cerrar() {
         this.detener();
 
