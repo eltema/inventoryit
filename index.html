@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- LIBRERÍA PARA EXCEL -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- LIBRERÍA PARA ESCANEAR CÓDIGOS -->
+    <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -174,7 +176,12 @@
                     </div>
                     <div class="form-group">
                         <label for="formSerial">Serial *</label>
-                        <input type="text" id="formSerial" placeholder="Número de serie" required>
+                        <div class="input-with-btn">
+                            <input type="text" id="formSerial" placeholder="Número de serie" required>
+                            <button type="button" class="btn-scan" id="btnEscanearSerial" title="Escanear con cámara">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="form-row">
@@ -218,6 +225,47 @@
                 <button class="btn btn-danger" id="btnConfirmarEliminar">
                     <i class="fas fa-trash"></i> Eliminar
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL ESCÁNER DE CÓDIGOS -->
+    <div class="modal" id="modalScanner">
+        <div class="modal-content modal-scanner">
+            <div class="modal-header">
+                <h2><i class="fas fa-camera"></i> Escanear serial</h2>
+                <button class="modal-close" id="btnCerrarScanner">&times;</button>
+            </div>
+
+            <div class="scanner-body">
+                <div class="scanner-video-wrap">
+                    <video id="scannerVideo" autoplay muted playsinline></video>
+                    <div class="scanner-overlay">
+                        <div class="scanner-frame">
+                            <span class="corner top-left"></span>
+                            <span class="corner top-right"></span>
+                            <span class="corner bottom-left"></span>
+                            <span class="corner bottom-right"></span>
+                        </div>
+                        <div class="scanner-laser"></div>
+                    </div>
+                </div>
+
+                <div class="scanner-info">
+                    <p id="scannerStatus">
+                        <i class="fas fa-info-circle"></i>
+                        Apunta la cámara al código de barras o QR
+                    </p>
+
+                    <div class="scanner-actions">
+                        <button type="button" class="btn btn-secondary" id="btnCambiarCamara">
+                            <i class="fas fa-sync-alt"></i> Cambiar cámara
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="btnLinterna">
+                            <i class="fas fa-lightbulb"></i> Linterna
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

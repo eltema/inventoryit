@@ -1,5 +1,5 @@
 // ============================================================
-// UTILS - Variables globales, estadísticas, exportar/importar
+// UTILS - Variables globales, estadísticas, exportar/importar, escáner
 // ============================================================
 
 // ---------- VARIABLES GLOBALES ----------
@@ -246,3 +246,204 @@ function leerArchivoExcel(file) {
         reader.readAsArrayBuffer(file);
     });
 }
+
+// ============================================================
+// ESCÁNER DE CÓDIGOS CON CÁMARA
+// ============================================================
+
+const Scanner = {
+    codeReader: null,
+    videoElement: null,
+    devices: [],
+    currentDeviceIndex: 0,
+    callback: null,
+    isScanning: false,
+    stream: null,
+    _linterna: false,
+
+    async abrir(onDetected) {
+        if (typeof ZXing === 'undefined') {
+            mostrarToast('Librería de escaneo no cargada. Revisa tu conexión.', 'error');
+            return;
+        }
+
+        this.callback = onDetected;
+        this.videoElement = document.getElementById('scannerVideo');
+
+        abrirModal(document.getElementById('modalScanner'));
+        this.actualizarStatus('Iniciando cámara...', 'info');
+
+        try {
+            this.codeReader = new ZXing.BrowserMultiFormatReader();
+            this.devices = await this.codeReader.listVideoInputDevices();
+
+            if (this.devices.length === 0) {
+                this.actualizarStatus('No se encontraron cámaras disponibles', 'error');
+                return;
+            }
+
+            // Preferir cámara trasera
+            this.currentDeviceIndex = this.devices.findIndex(d =>
+                /back|rear|environment|trasera/i.test(d.label)
+            );
+            if (this.currentDeviceIndex === -1) this.currentDeviceIndex = 0;
+
+            await this.iniciarLectura();
+
+        } catch (err) {
+            console.error('Error al iniciar escáner:', err);
+            this.actualizarStatus('Error al acceder a la cámara: ' + err.message, 'error');
+        }
+    },
+
+    async iniciarLectura() {
+        const deviceId = this.devices[this.currentDeviceIndex].deviceId;
+        this.isScanning = true;
+        this.actualizarStatus('Apunta la cámara al código...', 'info');
+
+        try {
+            this.codeReader.decodeFromVideoDevice(
+                deviceId,
+                this.videoElement,
+                (result, error) => {
+                    if (result && this.isScanning) {
+                        this.onDetectado(result.getText());
+                    }
+                }
+            );
+
+            // Guardar stream para linterna
+            setTimeout(() => {
+                if (this.videoElement.srcObject) {
+                    this.stream = this.videoElement.srcObject;
+                }
+            }, 500);
+
+        } catch (err) {
+            console.error('Error al leer:', err);
+            this.actualizarStatus('Error: ' + err.message, 'error');
+        }
+    },
+
+    onDetectado(texto) {
+        if (!this.isScanning) return;
+        this.isScanning = false;
+
+        const wrap = document.querySelector('.scanner-video-wrap');
+        wrap?.classList.add('detected');
+
+        if (navigator.vibrate) {
+            navigator.vibrate([80, 40, 80]);
+        }
+        this.reproducirBeep();
+
+        this.actualizarStatus('¡Detectado! ' + texto, 'success');
+
+        if (this.callback) this.callback(texto.trim());
+
+        setTimeout(() => this.cerrar(), 600);
+    },
+
+    async cambiarCamara() {
+        if (this.devices.length <= 1) {
+            mostrarToast('Solo hay una cámara disponible', 'warning');
+            return;
+        }
+
+        this.detener();
+        this.currentDeviceIndex = (this.currentDeviceIndex + 1) % this.devices.length;
+        this.codeReader = new ZXing.BrowserMultiFormatReader();
+
+        await new Promise(r => setTimeout(r, 250));
+        await this.iniciarLectura();
+    },
+
+    async toggleLinterna() {
+        try {
+            if (!this.stream && this.videoElement.srcObject) {
+                this.stream = this.videoElement.srcObject;
+            }
+            if (!this.stream) {
+                mostrarToast('No se puede acceder a la cámara', 'warning');
+                return;
+            }
+
+            const track = this.stream.getVideoTracks()[0];
+            const caps = track.getCapabilities ? track.getCapabilities() : {};
+
+            if (!caps.torch) {
+                mostrarToast('Esta cámara no soporta linterna', 'warning');
+                return;
+            }
+
+            this._linterna = !this._linterna;
+            await track.applyConstraints({ advanced: [{ torch: this._linterna }] });
+            document.getElementById('btnLinterna').classList.toggle('active', this._linterna);
+
+        } catch (err) {
+            console.error('Error linterna:', err);
+            mostrarToast('No se pudo activar la linterna', 'error');
+        }
+    },
+
+    reproducirBeep() {
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+
+            const ctx = new Ctx();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1400, ctx.currentTime);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.15);
+
+            setTimeout(() => ctx.close(), 300);
+        } catch (e) { /* ignorar */ }
+    },
+
+    actualizarStatus(mensaje, tipo = 'info') {
+        const el = document.getElementById('scannerStatus');
+        if (!el) return;
+
+        const iconos = {
+            info: 'fa-info-circle',
+            success: 'fa-check-circle',
+            error: 'fa-exclamation-circle'
+        };
+
+        el.className = tipo;
+        el.innerHTML = `<i class="fas ${iconos[tipo]}"></i> ${mensaje}`;
+    },
+
+    detener() {
+        if (this.codeReader) {
+            try { this.codeReader.reset(); } catch (e) { /* ignorar */ }
+        }
+        this.isScanning = false;
+    },
+
+    cerrar() {
+        this.detener();
+
+        document.querySelector('.scanner-video-wrap')?.classList.remove('detected');
+
+        if (this.videoElement && this.videoElement.srcObject) {
+            this.videoElement.srcObject.getTracks().forEach(t => t.stop());
+            this.videoElement.srcObject = null;
+        }
+
+        this.stream = null;
+        this._linterna = false;
+
+        cerrarModal(document.getElementById('modalScanner'));
+    }
+};
